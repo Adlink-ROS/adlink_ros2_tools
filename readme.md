@@ -20,6 +20,10 @@ $ ament build --only-packages adlink_ros2_tools
 For isolated build  
 $ ament build --isolated --build-tests --symlink-install --only adlink_ros2_tools
   
+## CPU Performance
+You need to set your cpu as "performance" mode.  
+$ sudo ./CURRENT_PKG/script/set_cpu_performance.bash  
+  
 ## Latency (Ping-Pong)  
 Usage (help function):  
 $ run adlink_ros2_tools RoundTrip_ping -h
