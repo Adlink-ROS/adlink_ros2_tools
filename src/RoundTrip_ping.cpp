@@ -143,7 +143,7 @@ public:
         publisher_ = this->create_publisher<adlink_msgs::msg::PingPong>(
 				"roundtrip_ping", rmw_qos_profile_parameters); //topic, QoS
         subscription_ = this->create_subscription<adlink_msgs::msg::PingPong>(
-				"roundtrip_ping", std::bind(&RoundTripPING::topic_callback, this, _1), rmw_qos_profile_parameters);
+				"roundtrip_pong", std::bind(&RoundTripPING::topic_callback, this, _1), rmw_qos_profile_parameters);
         timer_ = this->create_wall_timer(milliseconds(pub_timer_), std::bind(&RoundTripPING::timer_callback, this));
     }
 
