@@ -35,8 +35,8 @@ class RoundTripPONG : public rclcpp::Node
                 self_id_ = 0;
         }
         
-        publisher_ = this->create_publisher<adlink_msgs::msg::PingPong>("roadtrip_pong", rmw_qos_profile_parameters); //topic, QoS
-        subscription_ = this->create_subscription<adlink_msgs::msg::PingPong>("roadtrip_ping", 
+        publisher_ = this->create_publisher<adlink_msgs::msg::PingPong>("roundtrip_pong", rmw_qos_profile_parameters); //topic, QoS
+        subscription_ = this->create_subscription<adlink_msgs::msg::PingPong>("roundtrip_ping", 
                         std::bind(&RoundTripPONG::topic_callback, this, _1), rmw_qos_profile_parameters);
     }
 
