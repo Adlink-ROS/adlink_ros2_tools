@@ -2,7 +2,6 @@
 # Copyright 2018 ADLINK Technology, Inc.
 # Developer: 
 # * HaoChih, LIN (haochih.lin@adlinktech.com)
-# * Alan Chen (alan.chen@adlinktech.com)  
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.

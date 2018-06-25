@@ -23,6 +23,8 @@ $ ament build --isolated --build-tests --symlink-install --only adlink_ros2_tool
 ## CPU Performance
 You need to set your cpu as "performance" mode.  
 $ sudo ./CURRENT_PKG/script/set_cpu_performance.bash  
+Verify:
+$ cat /proc/cpuinfo | grep MHz  
   
 ## Latency (Ping-Pong)  
 Usage (help function):  
