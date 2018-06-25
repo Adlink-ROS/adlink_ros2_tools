@@ -22,15 +22,15 @@ $ ament build --isolated --build-tests --symlink-install --only adlink_ros2_tool
   
 ## Latency (Ping-Pong)  
 Usage (help function):  
-$ run adlink_ros2_training RoundTrip_ping -h
+$ run adlink_ros2_tools RoundTrip_ping -h
 
 Terminal 1:  
 $ export RMW_IMPLEMENTATION=rmw_opensplice_cpp  
-$ RCL_ASSERT_RMW_ID_MATCHES=rmw_opensplice_cpp ros2 run adlink_ros2_training RoundTrip_pong   
+$ RCL_ASSERT_RMW_ID_MATCHES=rmw_opensplice_cpp ros2 run adlink_ros2_tools RoundTrip_pong   
 
 Terminal 2:
 $ ros2 run adlink_ros2_training RoundTrip_ping -h  
 $ export RMW_IMPLEMENTATION=rmw_opensplice_cpp  
-$ RCL_ASSERT_RMW_ID_MATCHES=rmw_opensplice_cpp ros2 run adlink_ros2_training RoundTrip_ping -t 10 -p 1024  
+$ RCL_ASSERT_RMW_ID_MATCHES=rmw_opensplice_cpp ros2 run adlink_ros2_tools RoundTrip_ping -t 10 -p 1024  
 
 

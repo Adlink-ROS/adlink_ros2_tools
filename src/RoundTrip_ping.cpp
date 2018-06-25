@@ -1,5 +1,7 @@
 // Copyright 2018 ADLINK Technology, Inc.
-// Developer: HaoChih, LIN (haochih.lin@adlinktech.com)
+// Developer: 
+// * HaoChih, LIN (haochih.lin@adlinktech.com)
+// * Alan Chen (alan.chen@adlinktech.com)  
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +17,8 @@
 
 #include <iostream>
 #include <memory>
-#include <iomanip>      // std::setw & setprecision
+#include <iomanip>  // for setw & setprecision
+#include <fstream>  // for log file
 #include <string>
 #include <chrono>
 #include <vector>
@@ -26,7 +29,7 @@
 
 using namespace std::chrono_literals;
 using namespace std::chrono;
-using std::placeholders::_1;
+using std::placeholders::_1; // for timer duration
 
 class RoundTripPING : public rclcpp::Node
 {
@@ -62,7 +65,7 @@ class RoundTripPING : public rclcpp::Node
                     max_loop_ = 0;
             }
 
-            file_name_ = std::string("round_trip.log");
+            file_name_ = std::string("round_trip.csv");
             char * cli_option = rcutils_cli_get_option(argv, argv + argc, "-s");
             if (nullptr != cli_option) 
             {
@@ -102,15 +105,29 @@ class RoundTripPING : public rclcpp::Node
             std::cout << "WriteAccess duration (ms),  RoundTrip duration,  Overall RoundTrip duration" << std::endl;
         }
 
+        //Function for showing statistic result
         void show_result()
         {
             double RoundTripDuration_mean = vector_avg(RoundTripDuration_Vec_);
             double OverallRoundTripDuration_mean = vector_avg(OverallRoundTripDuration_Vec_);
 
             std::cout << "========== Testing Result ==========" << std::endl;
-            std::cout << "@RoundTripDuration average: " <<  RoundTripDuration_mean << ", variance: " << vector_var(RoundTripDuration_Vec_, RoundTripDuration_mean) << std::endl;
+            std::cout << "@RoundTripDuration average:        " <<  RoundTripDuration_mean << ", variance: " << vector_var(RoundTripDuration_Vec_, RoundTripDuration_mean) << std::endl;
             std::cout << "@OverallRoundTripDuration average: " <<  OverallRoundTripDuration_mean << ", variance: " << vector_var(OverallRoundTripDuration_Vec_, OverallRoundTripDuration_mean) << std::endl;
-        }
+        } // end of func
+
+        //Function for writing the log file
+        void write_logfile()
+        {
+            std::cout << "========== Writing logfile ==========" << std::endl;            
+            std::ofstream logfile;
+            logfile.open (file_name_);
+            logfile << "RoundTripDuration,OverallRoundTripDuration,\n";
+            for(int i=0; i<RoundTripDuration_Vec_.size(); i++)
+                logfile << RoundTripDuration_Vec_[i] << "," << OverallRoundTripDuration_Vec_[i] << ",\n";
+            logfile.close();
+            std::cout << "File saved! Name: " << file_name_ << std::endl; 
+        } // end of func
 
     private:       
         rclcpp::TimerBase::SharedPtr timer_;
@@ -237,6 +254,7 @@ int main(int argc, char * argv[])
     auto ping = std::make_shared<RoundTripPING>(argc, argv);
     rclcpp::spin(ping);
     rclcpp::shutdown();
+    ping->write_logfile();
     ping->show_result();
     return 0;
 }
