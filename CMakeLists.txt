@@ -15,15 +15,15 @@ find_package(rmw REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rcutils REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
+find_package(adlink_msgs REQUIRED)
 
 # RoadTrip_ping
 add_executable(RoundTrip_ping src/RoundTrip_ping.cpp)
-ament_target_dependencies(RoundTrip_ping rclcpp std_msgs)
+ament_target_dependencies(RoundTrip_ping rclcpp std_msgs adlink_msgs)
 
 # RoadTrip_ping
 add_executable(RoundTrip_pong src/RoundTrip_pong.cpp)
-ament_target_dependencies(RoundTrip_pong rclcpp std_msgs)
+ament_target_dependencies(RoundTrip_pong rclcpp std_msgs adlink_msgs)
 
 install(TARGETS
   RoundTrip_ping

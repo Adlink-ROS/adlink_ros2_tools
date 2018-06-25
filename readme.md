@@ -8,6 +8,9 @@
 ## License  
 Apache 2.0 (Copyright 2017 ADLINK Technology, Inc.)  
   
+# Dependencies  
+* adlink_ros2_msgs  
+
 ## Compile (examples)   
 $ cd ~/ros2_ws  
 $ ament build  
