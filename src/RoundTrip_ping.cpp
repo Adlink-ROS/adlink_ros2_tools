@@ -18,10 +18,13 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
-#include <iomanip>	// std::setw & setprecision
+#include <iomanip> // std::setw & setprecision
 #include <memory>
 #include <string>
+#include <sys/stat.h>
+#include <ctime>
 #include <time.h>
+#include <sys/types.h>
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
@@ -34,7 +37,7 @@
 using namespace std::chrono_literals;
 using namespace std::chrono;
 using std::placeholders::_1;
-    
+
 typedef struct _PacketRecord
 {
     bool isReceived;
@@ -43,7 +46,7 @@ typedef struct _PacketRecord
     time_point<high_resolution_clock> postReadTime_;
     double WriteAccessDuration;
     double RoundTripDuration;
-    double OverallRoundTripDuration;   
+    double OverallRoundTripDuration;
 } PacketRecord, *pPacketRecord;
 
 static int clamp(int v, int v_min, int v_max)
@@ -52,10 +55,11 @@ static int clamp(int v, int v_min, int v_max)
 }
 
 // Get current date/time, format is YYYY-MM-DD.HH:mm:ss
-static std::string currentDateTime() {
-    time_t     now = time(0);
-    struct tm  tstruct;
-    char       buf[80];
+static std::string currentDateTime()
+{
+    time_t now = time(0);
+    struct tm tstruct;
+    char buf[80];
     tstruct = *localtime(&now);
     strftime(buf, sizeof(buf), "%Y-%m-%d_%X", &tstruct);
     std::string ret(buf);
@@ -66,19 +70,21 @@ static std::string currentDateTime() {
 class RoundTripPING : public rclcpp::Node
 {
 public:
-
-    RoundTripPING(int argc, char * argv[]): Node("roundtrip_ping"), id_(0),
-                        pub_count_(0), sub_count_(0), isTestingDone_(false)
+    RoundTripPING(int argc, char* argv[])
+        : Node("roundtrip_ping")
+        , id_(0)
+        , pub_count_(0)
+        , isAlive_(false)
     {
         // verify command arguments
-        
+
         // ID
-        id_ = 0; 
+        id_ = 0;
         if (rcutils_cli_option_exist(argv, argv + argc, "-i"))
         {
             id_ = atoi(rcutils_cli_get_option(argv, argv + argc, "-i"));
         }
-        
+
         // Frequency
         uint32_t hz = 10;
         if (rcutils_cli_option_exist(argv, argv + argc, "-f"))
@@ -96,11 +102,20 @@ public:
             msg_size_ = atoi(rcutils_cli_get_option(argv, argv + argc, "-p"));
             msg_size_ = clamp(msg_size_, 1, 16 * 1024 * 1024);
         }
-        
+
         message_.sender_id = 0;
         message_.recver_id = 0xFF; // broadcast
         message_.packet_no = 0;
         message_.payload.resize(msg_size_ - MSG_HEADER_SIZE);
+
+        // Pong Numbers
+        pong_number_ = 1;
+        if (rcutils_cli_option_exist(argv, argv + argc, "-s"))
+        {
+            // Min = 0 times
+            pong_number_ = atoi(rcutils_cli_get_option(argv, argv + argc, "-s"));
+            pong_number_ = clamp(pong_number_, 0, pong_number_);
+        }
 
         // Test Times
         max_loop_ = 100;
@@ -110,21 +125,25 @@ public:
             max_loop_ = atoi(rcutils_cli_get_option(argv, argv + argc, "-t"));
             max_loop_ = clamp(max_loop_, 0, max_loop_);
         }
+        
         PacketRecord pr;
         pr.isReceived = false;
-        packetRecords_.resize(max_loop_, pr);
-
+        pr.WriteAccessDuration = 0.0;
+        pr.RoundTripDuration = 0.0;
+        pr.OverallRoundTripDuration = 0.0;
+        std::vector<PacketRecord> vpr(max_loop_, pr);
+        pongPacketRecords_.resize(pong_number_, vpr);
 
         // Log File
-        file_name_ = "RoundTrip_" + currentDateTime() + '_';
-        file_name_ += std::to_string(hz) + "Hz" + '_';
-        file_name_ += std::to_string(msg_size_) + "Byte" + '_';
-        file_name_ += std::to_string(max_loop_) + "Times";
-        file_name_ += ".log";
-        char * cli_option = rcutils_cli_get_option(argv, argv + argc, "-l");
+        dir_name_ = "RoundTrip_" + currentDateTime() + '_';
+        dir_name_ += std::to_string(hz) + "Hz" + '_';
+        dir_name_ += std::to_string(msg_size_) + "Byte" + '_';
+        dir_name_ += std::to_string(max_loop_) + "Times" + '_';
+        dir_name_ += std::to_string(pong_number_) + "Pongs";
+        char* cli_option = rcutils_cli_get_option(argv, argv + argc, "-l");
         if (nullptr != cli_option)
         {
-            file_name_ = std::string(cli_option);
+            dir_name_ = std::string(cli_option);
         }
 
         // Debug Info Message
@@ -132,163 +151,152 @@ public:
         if (rcutils_cli_option_exist(argv, argv + argc, "-d"))
         {
             debug_info_ = true;
-            std::cout << std::fixed    << std::setprecision(3)
-                      << std::setw(20) << "WriteAccess duration"
-                      << std::setw(20) << "RoundTrip duration"
-                      << std::setw(20) << "Overall RoundTrip duration" 
-                      << std::endl;
+            std::cout << std::fixed << std::setprecision(3) << std::setw(20) 
+                        << "Pong Number #" << std::setw(20)
+                        << "WriteAccess duration" << std::setw(20)
+                        << "RoundTrip duration" << std::setw(20) 
+                        << "Overall RoundTrip duration" << std::endl;
         }
 
         // ROS2 Pub, Sub, Timer
         publisher_ = this->create_publisher<adlink_msgs::msg::PingPong>(
-				"roundtrip_ping", rmw_qos_profile_parameters); //topic, QoS
-        subscription_ = this->create_subscription<adlink_msgs::msg::PingPong>(
-				"roundtrip_pong", std::bind(&RoundTripPING::topic_callback, this, _1), rmw_qos_profile_parameters);
-        timer_ = this->create_wall_timer(milliseconds(pub_timer_), std::bind(&RoundTripPING::timer_callback, this));
+            "roundtrip_ping", rmw_qos_profile_parameters); // topic, QoS
+            
+        subscription_ = this->create_subscription<adlink_msgs::msg::PingPong>("roundtrip_pong",
+            std::bind(&RoundTripPING::topic_callback, this, _1), rmw_qos_profile_parameters);
+            
+        timer_ = this->create_wall_timer(
+            milliseconds(pub_timer_), std::bind(&RoundTripPING::timer_callback, this));
     }
 
-    void ShowResult()
-    {
-        std::cout << "========== Testing Result ==========" << std::endl;
-        
-        double packetLoss = findPacketLoss(packetRecords_);
-        std::cout << "@PacketLoss: " << packetLoss << "(" << 100*packetLoss/max_loop_ << "%%)" << std::endl;
-        
-        double RoundTripDuration_mean = vector_avg(packetRecords_, &PacketRecord::RoundTripDuration);
-        double RoundTripDuration_var = vector_var(packetRecords_, &PacketRecord::RoundTripDuration, RoundTripDuration_mean);
-        std::cout << "@RoundTripDuration average: " <<  RoundTripDuration_mean << ", variance: " << RoundTripDuration_var << std::endl;
-        
-        double OverallRoundTripDuration_mean = vector_avg(packetRecords_, &PacketRecord::OverallRoundTripDuration);        
-        double OverallRoundTripDuration_var = vector_var(packetRecords_, &PacketRecord::OverallRoundTripDuration, OverallRoundTripDuration_mean);
-        std::cout << "@OverallRoundTripDuration average: " <<  OverallRoundTripDuration_mean << ", variance: " << OverallRoundTripDuration_var << std::endl;
-    }
-
-    //Function for saving the log file
+    // Function for saving the log file
     void SaveLogfile()
     {
-        std::cout << "========== Writing logfile ==========" << std::endl;            
-        std::ofstream logfile;
-        logfile.open(file_name_);
-        logfile << "RoundTripDuration,OverallRoundTripDuration\n";
-                
-        for(int i = 0; i < (int)packetRecords_.size(); i++)
+        const int dir_err = mkdir(dir_name_.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+        if (-1 == dir_err)
         {
-            PacketRecord* pr = &packetRecords_[i];
-            logfile << pr->RoundTripDuration << "," << pr->OverallRoundTripDuration << "\n";
+            printf("Error creating directory!n");
+            return;
         }
-        logfile.close();
-        std::cout << "File saved! Name: " << file_name_ << std::endl; 
+
+        std::cout << "========== Writing logfile ==========" << std::endl;
+
+        for (int i = 0; i < pong_number_; ++i)
+        {
+            std::vector<PacketRecord>* vpr = &pongPacketRecords_[i];
+            std::ofstream logfile;
+            std::string filename = std::to_string(i + 1) + ".log";
+            logfile.open(dir_name_ + '/' + filename);
+            logfile << "RoundTripDuration,OverallRoundTripDuration\n";
+            int loss_cnt = max_loop_;
+            for (int j = 0; j < (int)vpr->size(); ++j)
+            {
+                PacketRecord* pr = &(*vpr)[j];
+                
+                // if debug_info_ is true, the delay will be calculate in topic_callback()
+                if (debug_info_ == false) 
+                {            
+                    pr->WriteAccessDuration
+                        = duration<double, std::milli>(pr->postWriteTime_ - pr->preWriteTime_).count();
+                    pr->RoundTripDuration
+                        = duration<double, std::milli>(pr->postReadTime_ - pr->postWriteTime_).count() / 2.0;
+                    pr->OverallRoundTripDuration
+                        = duration<double, std::milli>(pr->postReadTime_ - pr->preWriteTime_).count() / 2.0;
+                }
+                
+                if (pr->isReceived)
+                {
+                    loss_cnt--;
+                    logfile << pr->RoundTripDuration << "," << pr->OverallRoundTripDuration << "\n";
+                }
+            }
+            std::cout << "Packet Lost of No." << i + 1 << "= " << loss_cnt
+                      << "packet @rate = " << 100 * loss_cnt / (double)max_loop_ << "%"
+                      << std::endl;
+            logfile.close();
+            std::cout << "File saved! Name: " << filename << std::endl;
+        }
     } // end of func
 
-    bool isTestDone()
+    bool IsAlive()
     {
-	    return isTestingDone_;
+        /* debug message */
+        return isAlive_;
     }
+
+    void ResetAlive()
+    {
+        /* debug message */
+        isAlive_ = false;
+    }
+
 
 private:
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::Publisher<adlink_msgs::msg::PingPong>::SharedPtr publisher_;
     rclcpp::Subscription<adlink_msgs::msg::PingPong>::SharedPtr subscription_;
     adlink_msgs::msg::PingPong message_ = adlink_msgs::msg::PingPong();
-    
-    uint32_t id_, pub_count_, sub_count_, pub_timer_, msg_size_, max_loop_;
-    bool debug_info_, isTestingDone_;
-    
-    std::string file_name_;
-    std::vector<PacketRecord> packetRecords_;
-    
 
-        
-    //Callback function for timer
+    int id_, pub_count_, pub_timer_, msg_size_, max_loop_, pong_number_;
+    bool debug_info_, isAlive_;
+
+    std::string dir_name_;
+    std::vector<std::vector<PacketRecord> > pongPacketRecords_;
+
+    // Callback function for timer
     void timer_callback()
     {
         if (pub_count_ >= max_loop_)
             return;
-        
+
         message_.packet_no = pub_count_;
 
-        PacketRecord* pr = &packetRecords_[pub_count_];
-        pr->preWriteTime_ = high_resolution_clock::now();
+        time_point<high_resolution_clock> pre = high_resolution_clock::now();
         publisher_->publish(message_);
-        pr->postWriteTime_ = high_resolution_clock::now();
+        time_point<high_resolution_clock> post = high_resolution_clock::now();
+
+        for (int i = 0; i < pong_number_; ++i)
+        {
+            PacketRecord* pr = &pongPacketRecords_[i][pub_count_];
+            pr->preWriteTime_ = pre;
+            pr->postWriteTime_ = post;
+        }
+
         pub_count_++;
     } // end of func
 
-    //Callback function for subscription
+
+    // Callback function for subscription
     void topic_callback(const adlink_msgs::msg::PingPong::SharedPtr msg)
     {
         time_point<high_resolution_clock> tmp = high_resolution_clock::now();
-        
-        if (msg->packet_no >= max_loop_-1 || isTestingDone_)
-        {
-            isTestingDone_ = true;
+
+        if (msg->sender_id - 1 >= pong_number_)
             return;
-        }
-        
-        PacketRecord* pr = &packetRecords_[msg->packet_no];
+
+        PacketRecord* pr = &pongPacketRecords_[msg->sender_id - 1][msg->packet_no];
         pr->isReceived = true;
         pr->postReadTime_ = tmp;
-        pr->WriteAccessDuration = duration<double, std::milli>(pr->postWriteTime_ - pr->preWriteTime_).count();
-        pr->RoundTripDuration = duration<double, std::milli>(pr->postReadTime_ - pr->postWriteTime_).count() / 2.0;
-        pr->OverallRoundTripDuration = duration<double, std::milli>(pr->postReadTime_ - pr->preWriteTime_).count() / 2.0;
+
+        if (debug_info_)
+        {            
+            pr->WriteAccessDuration
+                = duration<double, std::milli>(pr->postWriteTime_ - pr->preWriteTime_).count();
+            pr->RoundTripDuration
+                = duration<double, std::milli>(pr->postReadTime_ - pr->postWriteTime_).count() / 2.0;
+            pr->OverallRoundTripDuration
+                = duration<double, std::milli>(pr->postReadTime_ - pr->preWriteTime_).count() / 2.0;
         
-        if(debug_info_)
-        {
-            std::cout << std::fixed    << std::setprecision(3)
-                      << std::setw(20) << pr->WriteAccessDuration
-                      << std::setw(20) << pr->RoundTripDuration
-                      << std::setw(20) << pr->OverallRoundTripDuration  << std::endl;
+            std::cout << std::fixed << std::setprecision(3) << std::setw(20)
+                        << msg->sender_id << std::setw(20) 
+                        << pr->WriteAccessDuration << std::setw(20)
+                        << pr->RoundTripDuration << std::setw(20) 
+                        << pr->OverallRoundTripDuration << std::endl;
         }
-        (void)msg;
+        isAlive_ = true;
     } // end of func
-    
-    //Function for packet loss
-    int findPacketLoss(std::vector<PacketRecord>& v)
-    {
-        int ret = 0;
-        std::vector<PacketRecord>::iterator it = v.begin();
-        for (; it != v.end();)
-        {
-            if (it->isReceived == false)
-            {
-                it = v.erase(it);
-                ret++;
-            }
-            else
-            {
-                ++it;
-            }
-        }
-        return ret;
-    } // end of func
-
-    //Function for average
-    double vector_avg(std::vector<PacketRecord>& v, double PacketRecord::*member)
-    {    
-        double sum = 0;
-        std::vector<PacketRecord>::iterator it = v.begin();
-        for(; it != v.end(); ++it)
-        {
-            sum += (*it).*member;
-        }
-        return sum / v.size();
-    } // end of func
-
-    //Function for variance
-    double vector_var(std::vector<PacketRecord>& v, double PacketRecord::*member, double mean)
-    {
-        double sum = 0.0, temp = 0.0;
-
-        for (int i = 0; i < (int)v.size(); ++i)
-        {
-            temp = pow((v[i].*member - mean),2);
-            sum += temp;
-        }
-
-        return sum / (v.size() -2);
-    } // end of func
-
 };
+
 
 void print_usage()
 {
@@ -296,17 +304,22 @@ void print_usage()
     printf("options:\n");
     printf("-d : debug_info. Showing the debug info.\n");
     printf("-f : frequency. Specify the publishing frequency(hz). [default=10]\n");
-    printf("-h : Print this help function.\n");    
+    printf("-h : Print this help function.\n");
     printf("-i : identification. Specify the id of this ROS node. [default=0]\n");
     printf("-l : logfile_name. Specify the logfile name. [default=time_stamp].\n");
     printf("-p : packet_size. Specify the size of payload for publishing (Byte) [default=4].\n");
+    printf("-s : pong_number_. Specify the number of pongs for single ping and multiple pong test [default=1].\n");
     printf("-t : test_times. Specify the number of loops for testing [default=100].\n");
 }
 
 
-int main(int argc, char * argv[])
+int main(int argc, char* argv[])
 {
     rclcpp::init(argc, argv);
+
+    // countdown timer for testing timeout
+    std::clock_t start;
+    double duration;
 
     // Print the help function
     if (rcutils_cli_option_exist(argv, argv + argc, "-h"))
@@ -316,12 +329,28 @@ int main(int argc, char * argv[])
     }
 
     auto ping = std::make_shared<RoundTripPING>(argc, argv);
-    while(!ping->isTestDone())
+    start = std::clock();
+
+    while (1)
     {
-	    rclcpp::spin_some(ping);
-    }    
+        rclcpp::spin_some(ping);
+
+        duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;
+        if (duration > 10.0)
+        {
+            printf("No packet arrived in 10 sec ... Timeout!\n");
+            break;
+        }
+
+        if (ping->IsAlive())
+        {
+            start = std::clock();
+            ping->ResetAlive();
+        }
+    }
+
     rclcpp::shutdown();
     ping->SaveLogfile();
-    ping->ShowResult();
+    // ping->ShowResult();
     return 0;
 }
